@@ -1,0 +1,19 @@
+pandas>=1.5.0, <2.1.0
+pymysql>=1.1.0
+requests>=2.31.0
+python-dotenv>=1.0.1
+pylint
+beautifulsoup4
+apache-airflow-providers-common-sql==1.5.2
+psycopg2-binary
+apache-airflow-providers-postgres
+apache-airflow-providers-microsoft-azure
+azure-identity
+azure-storage-blob
+boto3
+apache-airflow-providers-amazon
+mysql-connector-python
+apache-airflow-providers-mysql
+selenium
+flask
+psycopg2
