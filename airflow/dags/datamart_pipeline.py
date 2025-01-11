@@ -28,6 +28,7 @@ def extract_data(**kwargs):
                 DATE(TO_TIMESTAMP(timestamp, 'YYYYMMDDHH24MISS')) AS date,
                 sell
             FROM hsh_prices
+            WHERE sell IS NOT NULL
         ),
         hsh_grouped AS (
             SELECT 
@@ -36,7 +37,10 @@ def extract_data(**kwargs):
                 AVG(sell) AS avg_sell,
                 MIN(sell) AS min_price,
                 MAX(sell) AS max_price,
-                STDDEV_SAMP(sell) AS volatility,
+                CASE 
+                    WHEN COUNT(sell) > 1 THEN STDDEV_SAMP(sell)
+                    ELSE 0
+                END AS volatility,
                 100 * (AVG(sell) - LAG(AVG(sell)) OVER (ORDER BY date)) / NULLIF(LAG(AVG(sell)) OVER (ORDER BY date), 0) AS price_change
             FROM hsh_data
             GROUP BY date
@@ -60,6 +64,7 @@ def extract_data(**kwargs):
                 DATE(TO_TIMESTAMP(timestamp, 'YYYYMMDDHH24MISS')) AS date,
                 sell
             FROM ref_prices
+            WHERE sell IS NOT NULL
         ),
         ref_grouped AS (
             SELECT 
@@ -68,7 +73,10 @@ def extract_data(**kwargs):
                 AVG(sell) AS avg_sell,
                 MIN(sell) AS min_price,
                 MAX(sell) AS max_price,
-                STDDEV_SAMP(sell) AS volatility,
+                CASE 
+                    WHEN COUNT(sell) > 1 THEN STDDEV_SAMP(sell)
+                    ELSE 0
+                END AS volatility,
                 100 * (AVG(sell) - LAG(AVG(sell)) OVER (ORDER BY date)) / NULLIF(LAG(AVG(sell)) OVER (ORDER BY date), 0) AS price_change
             FROM ref_data
             GROUP BY date

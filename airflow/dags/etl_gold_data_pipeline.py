@@ -32,9 +32,18 @@ def convert_json_to_csv(**kwargs):
         raw_csv_path = os.path.join(local_csv_directory, "gold_prices_raw.csv")
         with open(json_file_path, "r") as json_file:
             data = json.load(json_file)
-        with open(raw_csv_path, "w", newline="") as raw_csv:
+
+        # ตรวจสอบว่าไฟล์ CSV มีข้อมูลหรือไม่
+        file_exists = os.path.isfile(raw_csv_path)
+        write_header = not file_exists or os.stat(raw_csv_path).st_size == 0  # เขียน header หากไฟล์ไม่มีข้อมูล
+
+        with open(raw_csv_path, "a", newline="") as raw_csv:
             writer = csv.DictWriter(raw_csv, fieldnames=["GoldType", "Buy", "Sell", "Timestamp"])
-            writer.writeheader()
+
+            # เขียน header ถ้าไฟล์ยังไม่มีข้อมูล
+            if write_header:
+                writer.writeheader()
+
             for item in data:
                 writer.writerow({
                     "GoldType": item.get("GoldType"),
@@ -61,105 +70,98 @@ def transform_csv(**kwargs):
         return None
 
     try:
-        local_csv_directory = os.path.join(os.getenv('AIRFLOW_HOME', '/opt/airflow'), 'dags', 'files', 'cleand_csv')
+        # เตรียม Directory ปลายทางที่เราจะเก็บไฟล์ HSH และ REF
+        local_csv_directory = os.path.join(
+            os.getenv('AIRFLOW_HOME', '/opt/airflow'),
+            'dags', 'files', 'cleaned_csv'
+        )
         os.makedirs(local_csv_directory, exist_ok=True)
+
+        # ตั้งชื่อไฟล์ผลลัพธ์
         hsh_csv_path = os.path.join(local_csv_directory, "gold_hsh_prices.csv")
         ref_csv_path = os.path.join(local_csv_directory, "gold_ref_prices.csv")
 
-        with open(raw_csv_path, "r") as raw_csv:
+        # อ่านข้อมูลจาก raw CSV พร้อมตรวจสอบ header
+        with open(raw_csv_path, "r", encoding="utf-8") as raw_csv:
             reader = csv.DictReader(raw_csv)
-            hsh_data = [row for row in reader if row.get("GoldType") == "HSH"]
-            raw_csv.seek(0)
-            ref_data = [row for row in reader if row.get("GoldType") == "REF"]
+            headers = reader.fieldnames
+            print("Headers:", headers)  # Debug: ตรวจสอบ header
 
+            # อ่านข้อมูลทั้งหมด
+            new_data = [row for row in reader]
+            print("New Data:", new_data)  # Debug: ตรวจสอบข้อมูลใหม่
+
+        # ฟังก์ชันอ่าน Timestamp ที่มีอยู่ในไฟล์ CSV ปลายทาง
+        def read_existing_timestamps(file_path):
+            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                return set()
+            with open(file_path, "r", encoding="utf-8") as csv_file:
+                reader = csv.DictReader(csv_file)
+                return {row["Timestamp"] for row in reader}
+
+        # อ่าน Timestamp ที่มีอยู่แล้วในไฟล์ HSH และ REF
+        existing_hsh_timestamps = read_existing_timestamps(hsh_csv_path)
+        existing_ref_timestamps = read_existing_timestamps(ref_csv_path)
+
+        print("Existing HSH Timestamps:", existing_hsh_timestamps)  # Debug
+        print("Existing REF Timestamps:", existing_ref_timestamps)  # Debug
+
+        # สร้าง fieldnames ที่ต้องการเก็บในไฟล์ CSV ปลายทาง
         fieldnames = ["GoldType", "Buy", "Sell", "Timestamp", "Day", "Month", "Year", "Hour", "Minute", "Second"]
 
-        # Save HSH data
-        with open(hsh_csv_path, "w", newline="") as hsh_csv:
-            writer = csv.DictWriter(hsh_csv, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in hsh_data:
-                writer.writerow({
-                    "GoldType": row.get("GoldType"),
-                    "Buy": float(row.get("Buy", "0").replace(",", "")),
-                    "Sell": float(row.get("Sell", "0").replace(",", "")),
-                    "Timestamp": row.get("Timestamp"),
-                    "Day": DAY,
-                    "Month": MONTH,
-                    "Year": YEAR,
-                    "Hour": HOUR,
-                    "Minute": MINUTE,
-                    "Second": SECOND
-                })
+        # แยกข้อมูล HSH และ REF พร้อมกรองข้อมูลซ้ำ
+        hsh_data = [
+            row for row in new_data if row.get("GoldType") == "HSH" and row.get("Timestamp") not in existing_hsh_timestamps
+        ]
+        ref_data = [
+            row for row in new_data if row.get("GoldType") == "REF" and row.get("Timestamp") not in existing_ref_timestamps
+        ]
 
-        # Save REF data
-        with open(ref_csv_path, "w", newline="") as ref_csv:
-            writer = csv.DictWriter(ref_csv, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in ref_data:
-                writer.writerow({
-                    "GoldType": row.get("GoldType"),
-                    "Buy": float(row.get("Buy", "0").replace(",", "")),
-                    "Sell": float(row.get("Sell", "0").replace(",", "")),
-                    "Timestamp": row.get("Timestamp"),
-                    "Day": DAY,
-                    "Month": MONTH,
-                    "Year": YEAR,
-                    "Hour": HOUR,
-                    "Minute": MINUTE,
-                    "Second": SECOND
-                })
+        print("Filtered HSH Data:", hsh_data)  # Debug: ตรวจสอบข้อมูล HSH ที่ไม่ซ้ำ
+        print("Filtered REF Data:", ref_data)  # Debug: ตรวจสอบข้อมูล REF ที่ไม่ซ้ำ
 
+        # ฟังก์ชันเขียนข้อมูลใหม่ลงในไฟล์ CSV
+        def write_to_csv(data, file_path):
+            with open(file_path, "a", newline="", encoding="utf-8") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+
+                # เช็คว่าขนาดไฟล์เป็น 0 หรือไม่ (ถ้าไฟล์ยังไม่มี header)
+                if os.path.getsize(file_path) == 0:
+                    writer.writeheader()
+
+                for row in data:
+                    try:
+                        # แปลง Timestamp จาก row.get("Timestamp")
+                        raw_timestamp = row.get("Timestamp", "").replace("-", "").replace(" ", "").replace(":", "")
+                        timestamp = datetime.strptime(raw_timestamp, "%Y%m%d%H%M%S")
+
+                        writer.writerow({
+                            "GoldType": row.get("GoldType"),
+                            "Buy": float(row.get("Buy").replace(",", "")),
+                            "Sell": float(row.get("Sell").replace(",", "")),
+                            "Timestamp": raw_timestamp,  # ใช้ Timestamp ในรูปแบบ 20250111162030
+                            "Day": timestamp.day,
+                            "Month": timestamp.month,
+                            "Year": timestamp.year,
+                            "Hour": timestamp.hour,
+                            "Minute": timestamp.minute,
+                            "Second": timestamp.second
+                        })
+                    except Exception as e:
+                        print(f"Error processing row: {row}, Error: {e}")
+
+        # บันทึกข้อมูลลงไฟล์ HSH และ REF
+        write_to_csv(hsh_data, hsh_csv_path)
+        write_to_csv(ref_data, ref_csv_path)
+
+        # push XCom เก็บ path ของไฟล์ผลลัพธ์
         kwargs['ti'].xcom_push(key='hsh_csv_path', value=hsh_csv_path)
         kwargs['ti'].xcom_push(key='ref_csv_path', value=ref_csv_path)
 
-        print(f"Transformed data saved to {hsh_csv_path} and {ref_csv_path}")
+        print(f"Appended transformed data to {hsh_csv_path} and {ref_csv_path}")
 
     except Exception as e:
         print(f"Error transforming CSV: {e}")
-
-def ensure_table_exists(cursor, table_name):
-    """Check if a table exists in the database and create it if not."""
-    create_table_queries = {
-        "hsh_prices": """
-            CREATE TABLE IF NOT EXISTS hsh_prices (
-                GoldType VARCHAR(10),
-                Buy FLOAT,
-                Sell FLOAT,
-                Timestamp VARCHAR(20),
-                Day INT,
-                Month INT,
-                Year INT,
-                Hour INT,
-                Minute INT,
-                Second INT
-            );
-            CREATE INDEX IF NOT EXISTS idx_hsh_prices_timestamp ON hsh_prices (Timestamp);
-            CREATE INDEX IF NOT EXISTS idx_hsh_prices_sell ON hsh_prices (Sell);
-        """,
-        "ref_prices": """
-            CREATE TABLE IF NOT EXISTS ref_prices (
-                GoldType VARCHAR(10),
-                Buy FLOAT,
-                Sell FLOAT,
-                Timestamp VARCHAR(20),
-                Day INT,
-                Month INT,
-                Year INT,
-                Hour INT,
-                Minute INT,
-                Second INT
-            );
-            CREATE INDEX IF NOT EXISTS idx_ref_prices_timestamp ON ref_prices (Timestamp);
-            CREATE INDEX IF NOT EXISTS idx_ref_prices_sell ON ref_prices (Sell);
-        """
-    }
-
-    if table_name in create_table_queries:
-        cursor.execute(create_table_queries[table_name])
-        print(f"Ensured table {table_name} exists.")
-    else:
-        raise ValueError(f"No create table query defined for table: {table_name}")
 
 # Load Task
 def load_csv_to_postgres(**kwargs):
@@ -186,9 +188,11 @@ def load_csv_to_postgres(**kwargs):
             ensure_table_exists(cursor, table_name)
 
             # Load data into the table
-            print(f"Loading data from {csv_path} into table {table_name}")
-            with open(csv_path, "r") as file:
-                cursor.copy_expert(f"COPY {table_name} FROM STDIN WITH CSV HEADER", file)
+            with open(csv_path, "r", encoding="utf-8") as file:
+                cursor.copy_expert(f"""
+                    COPY {table_name}(goldtype, buy, sell, timestamp, day, month, year, hour, minute, second)
+                    FROM STDIN WITH CSV HEADER
+                """, file)
 
         conn.commit()
         cursor.close()
@@ -196,6 +200,52 @@ def load_csv_to_postgres(**kwargs):
 
     except Exception as e:
         print(f"Error loading data to Postgres: {e}")
+
+def ensure_table_exists(cursor, table_name):
+    """Check if a table exists in the database and create it if not."""
+    create_table_queries = {
+        "hsh_prices": """
+            CREATE TABLE IF NOT EXISTS hsh_prices (
+                id SERIAL PRIMARY KEY,
+                GoldType VARCHAR(10),
+                Buy FLOAT,
+                Sell FLOAT,
+                Timestamp VARCHAR(20),
+                Day INT,
+                Month INT,
+                Year INT,
+                Hour INT,
+                Minute INT,
+                Second INT
+            );
+            CREATE INDEX IF NOT EXISTS idx_hsh_prices_timestamp ON hsh_prices (Timestamp);
+            CREATE INDEX IF NOT EXISTS idx_hsh_prices_sell ON hsh_prices (Sell);
+        """,
+        "ref_prices": """
+            CREATE TABLE IF NOT EXISTS ref_prices (
+                id SERIAL PRIMARY KEY,
+                GoldType VARCHAR(10),
+                Buy FLOAT,
+                Sell FLOAT,
+                Timestamp VARCHAR(20),
+                Day INT,
+                Month INT,
+                Year INT,
+                Hour INT,
+                Minute INT,
+                Second INT
+            );
+            CREATE INDEX IF NOT EXISTS idx_ref_prices_timestamp ON ref_prices (Timestamp);
+            CREATE INDEX IF NOT EXISTS idx_ref_prices_sell ON ref_prices (Sell);
+        """
+    }
+
+    if table_name in create_table_queries:
+        cursor.execute(create_table_queries[table_name])
+        print(f"Ensured table {table_name} exists.")
+    else:
+        raise ValueError(f"No create table query defined for table: {table_name}")
+
 
 
 # DAG definition
