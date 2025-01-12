@@ -1,3 +1,5 @@
 airflow/dags/__pycache__/*.pyc
+airflow/dags/files/*
+airflow/dags/raw_json_files/*
 airflow/logs/*
 *.log
